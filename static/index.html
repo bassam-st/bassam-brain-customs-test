@@ -1,1 +1,98 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bassam Brain Customs Test</title>
+  <style>
+    :root{--bg:#0f172a;--card:#111827;--muted:#94a3b8;--text:#f8fafc;--accent:#22c55e;--danger:#ef4444;--line:#334155;--user:#1d4ed8;--bot:#162032}
+    *{box-sizing:border-box} body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Tahoma,Arial;background:var(--bg);color:var(--text)}
+    .wrap{max-width:1050px;margin:0 auto;padding:14px}.top{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+    h1{font-size:20px;margin:8px 0}.badge{font-size:13px;color:var(--muted)}
+    .tabs{display:flex;gap:8px;margin:14px 0;flex-wrap:wrap}.tab{border:1px solid var(--line);background:#0b1220;color:var(--text);padding:10px 13px;border-radius:12px;cursor:pointer}.tab.active{background:var(--accent);color:#052e16;border-color:var(--accent);font-weight:700}
+    .grid{display:grid;grid-template-columns:1fr 330px;gap:12px}.panel{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden}.panel.pad{padding:14px}
+    #chat{height:62vh;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:10px}.msg{white-space:pre-wrap;line-height:1.65;padding:10px 12px;border-radius:14px;max-width:88%;font-size:15px}.user{background:var(--user);align-self:flex-start}.bot{background:var(--bot);align-self:flex-end;border:1px solid var(--line)}
+    .bar{display:flex;gap:8px;padding:12px;border-top:1px solid var(--line)} textarea{flex:1;min-height:48px;resize:vertical;border-radius:12px;border:1px solid var(--line);background:#0b1220;color:var(--text);padding:10px;font-size:16px}button{border:0;background:var(--accent);color:#052e16;font-weight:700;border-radius:12px;padding:10px 14px;cursor:pointer}button.secondary{background:#334155;color:var(--text)}button.danger{background:var(--danger);color:white}
+    input,select{width:100%;border:1px solid var(--line);background:#0b1220;color:var(--text);border-radius:10px;padding:10px;margin:6px 0 10px;font-size:15px}label{font-size:13px;color:var(--muted)}.small{font-size:13px;color:var(--muted);line-height:1.6}.hide{display:none}.item{border:1px solid var(--line);border-radius:12px;padding:10px;margin:8px 0;background:#0b1220}.row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    @media(max-width:850px){.grid{grid-template-columns:1fr}#chat{height:58vh}.msg{max-width:96%}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div><h1>بسام براين - تجربة الجمارك</h1><div class="badge">تطبيق مستقل للتجربة، لا يلمس التطبيقات الأصلية</div></div>
+      <div class="badge" id="status">جاري الفحص...</div>
+    </div>
+    <div class="tabs">
+      <button class="tab active" id="customsBtn">وضع الجمارك</button>
+      <button class="tab" id="generalBtn">الوضع العام</button>
+      <button class="tab" id="adminBtn">إدارة الأصناف</button>
+    </div>
 
+    <div id="chatView" class="grid">
+      <div class="panel">
+        <div id="chat"></div>
+        <div class="bar">
+          <textarea id="message" placeholder="اكتب سؤالك هنا..."></textarea>
+          <button id="send">إرسال</button>
+        </div>
+      </div>
+      <div class="panel pad">
+        <h3>طريقة العمل</h3>
+        <p class="small"><b>وضع الجمارك:</b> يقرأ من ملف الجمارك فقط، ويسأل عن البيانات الناقصة، ثم يحسب من السعر والفئة المحفوظة.</p>
+        <p class="small"><b>الوضع العام:</b> يستخدم Groq / Anthropic / Google Search إذا أضفت المفاتيح في Secrets.</p>
+        <hr style="border-color:var(--line)">
+        <p class="small">أمثلة للتجربة:</p>
+        <button class="secondary sample">كم جمارك بطاريات الليثيوم؟</button><br><br>
+        <button class="secondary sample">معي 10 بطاريات طاقة 100 امبير كم الجمارك؟</button><br><br>
+        <button class="secondary sample">كم جمارك الواح طاقة 10 الواح 550 وات؟</button>
+      </div>
+    </div>
+
+    <div id="adminView" class="panel pad hide">
+      <h2>إدارة الأصناف الجديدة</h2>
+      <p class="small">الإضافة هنا تحفظ في متصفحك وتدخل مباشرة في البحث. لجعلها عامة للجميع، صدّر نسخة JSON محدثة وارفعها بدل ملف البيانات في المشروع.</p>
+      <div class="row"><div><label>اسم الصنف</label><input id="name" placeholder="مثال: بطاريات ليثيوم" /></div><div><label>البند الجمركي</label><input id="hsCode" placeholder="85078000" /></div></div>
+      <div class="row"><div><label>السعر بالدولار</label><input id="usdPrice" type="number" step="0.0001" placeholder="0.7" /></div><div><label>وحدة السعر</label><input id="priceUnit" placeholder="الامبير / الكيلو / قطعة / الطن" /></div></div>
+      <div class="row"><div><label>الفئة</label><select id="categoryLabel"><option value="5%">5%</option><option value="10%">10%</option><option value="21%">21%</option><option value="25%">25%</option></select></div><div><label>بلد المنشأ</label><input id="countryOfOrigin" placeholder="اختياري" /></div></div>
+      <label>أسماء بديلة، افصل بينها بفاصلة</label><input id="aliases" placeholder="بطاريه, ليثيوم, بطاريات طاقة" />
+      <label>ملاحظة</label><input id="notes" placeholder="اختياري" />
+      <button id="addItem">إضافة الصنف</button>
+      <button class="secondary" id="exportJson">تصدير نسخة محدثة JSON</button>
+      <button class="danger" id="clearLocal">حذف الأصناف المحلية</button>
+      <h3>الأصناف المحلية المضافة</h3><div id="localItems"></div>
+    </div>
+  </div>
+
+<script>
+let mode = 'customs';
+let sessionId = localStorage.getItem('sessionId') || crypto.randomUUID();
+localStorage.setItem('sessionId', sessionId);
+const chat = document.getElementById('chat');
+const message = document.getElementById('message');
+const statusEl = document.getElementById('status');
+
+function localItems(){ return JSON.parse(localStorage.getItem('customLocalItems') || '[]'); }
+function saveLocalItems(items){ localStorage.setItem('customLocalItems', JSON.stringify(items)); renderLocalItems(); }
+function categoryFactor(label){ if(label==='5%') return 0.211; if(label==='10%') return 0.265; return 0.41; }
+function normalize(s){ return (s||'').toString().trim().toLowerCase().replace(/[أإآٱ]/g,'ا').replace(/ى/g,'ي').replace(/ة/g,'ه').replace(/[\u0617-\u061A\u064B-\u0652]/g,'').replace(/\s+/g,' '); }
+function tokensFor(name, aliases, hs){ const arr=[name, hs, ...aliases]; return arr.map(normalize).filter(Boolean); }
+function addMsg(text, who='bot'){ const d=document.createElement('div'); d.className='msg '+who; d.textContent=text; chat.appendChild(d); chat.scrollTop=chat.scrollHeight; }
+function setMode(m){ mode=m; document.getElementById('customsBtn').classList.toggle('active',m==='customs'); document.getElementById('generalBtn').classList.toggle('active',m==='general'); document.getElementById('adminBtn').classList.remove('active'); document.getElementById('chatView').classList.remove('hide'); document.getElementById('adminView').classList.add('hide'); addMsg(m==='customs'?'تم تفعيل وضع الجمارك. اسألني عن جمارك أي صنف محفوظ.':'تم تفعيل الوضع العام. اسأل أي سؤال عام.','bot'); }
+async function send(){ const text=message.value.trim(); if(!text) return; message.value=''; addMsg(text,'user'); addMsg('جاري المعالجة...','bot'); const loading=chat.lastChild; try{ const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,mode,session_id:sessionId,extra_items:localItems(),use_search:true})}); const data=await r.json(); sessionId=data.session_id||sessionId; localStorage.setItem('sessionId', sessionId); loading.textContent=data.reply||'لا يوجد رد'; }catch(e){ loading.textContent='حدث خطأ في الاتصال: '+e.message; }}
+
+document.getElementById('send').onclick=send; message.addEventListener('keydown',e=>{ if(e.key==='Enter' && !e.shiftKey){e.preventDefault();send();}});
+document.getElementById('customsBtn').onclick=()=>setMode('customs'); document.getElementById('generalBtn').onclick=()=>setMode('general');
+document.getElementById('adminBtn').onclick=()=>{ document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active')); document.getElementById('adminBtn').classList.add('active'); document.getElementById('chatView').classList.add('hide'); document.getElementById('adminView').classList.remove('hide'); renderLocalItems(); };
+document.querySelectorAll('.sample').forEach(b=>b.onclick=()=>{message.value=b.textContent; send();});
+
+document.getElementById('addItem').onclick=()=>{ const name=document.getElementById('name').value.trim(); const usdPrice=parseFloat(document.getElementById('usdPrice').value); const priceUnit=document.getElementById('priceUnit').value.trim(); const categoryLabel=document.getElementById('categoryLabel').value; if(!name||!usdPrice||!priceUnit){ alert('اكتب الاسم والسعر والوحدة'); return; } const aliases=document.getElementById('aliases').value.split(',').map(x=>x.trim()).filter(Boolean); const item={ id:'local-'+Date.now(), name, normalizedName:normalize(name), aliases, hsCode:document.getElementById('hsCode').value.trim(), usdPrice, priceUnit, categoryLabel, categoryFactor:categoryFactor(categoryLabel), countryOfOrigin:document.getElementById('countryOfOrigin').value.trim(), shortDescription:'', longDescription:'', notes:document.getElementById('notes').value.trim(), status:'active', isFavorite:false, usageCount:0, searchTokens:tokensFor(name, aliases, document.getElementById('hsCode').value), createdAt:new Date().toISOString(), createdBy:'local-admin', updatedAt:new Date().toISOString(), updatedBy:'local-admin' }; const items=localItems(); items.push(item); saveLocalItems(items); ['name','hsCode','usdPrice','priceUnit','countryOfOrigin','aliases','notes'].forEach(id=>document.getElementById(id).value=''); alert('تمت إضافة الصنف محليًا'); };
+function renderLocalItems(){ const box=document.getElementById('localItems'); const items=localItems(); if(!items.length){ box.innerHTML='<p class="small">لا توجد أصناف محلية مضافة.</p>'; return;} box.innerHTML=''; items.forEach((it,i)=>{ const d=document.createElement('div'); d.className='item'; d.innerHTML=`<b>${it.name}</b><div class="small">${it.usdPrice} دولار / ${it.priceUnit} — ${it.categoryLabel} — ${it.hsCode||'بدون بند'}</div><button class="danger" data-i="${i}">حذف</button>`; box.appendChild(d); }); box.querySelectorAll('button').forEach(btn=>btn.onclick=()=>{ const items=localItems(); items.splice(parseInt(btn.dataset.i),1); saveLocalItems(items); }); }
+document.getElementById('clearLocal').onclick=()=>{ if(confirm('حذف كل الأصناف المحلية؟')) saveLocalItems([]); };
+document.getElementById('exportJson').onclick=async()=>{ const base=await fetch('/api/customs/items').then(r=>r.json()); const backup={version:'1.0-local-merged', exportedAt:new Date().toISOString(), items:[...base.items, ...localItems()], operations:[]}; const blob=new Blob([JSON.stringify(backup,null,2)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='customs-backup-updated-'+new Date().toISOString().slice(0,10)+'.json'; a.click(); URL.revokeObjectURL(a.href); };
+fetch('/api/health').then(r=>r.json()).then(d=>{statusEl.textContent=`جاهز — عدد الأصناف: ${d.items} — الصرف: ${d.exchange_rate}`;}).catch(()=>statusEl.textContent='تعذر فحص الخادم');
+addMsg('أهلًا بسام. أنت الآن في وضع الجمارك. اكتب مثلًا: كم جمارك بطاريات الليثيوم؟','bot');
+renderLocalItems();
+</script>
+</body>
+</html>
