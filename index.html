@@ -21,7 +21,7 @@
   <div class="wrap">
     <div class="top">
       <div><h1>بسام براين - تجربة الجمارك</h1><div class="badge">تطبيق مستقل للتجربة، لا يلمس التطبيقات الأصلية</div></div>
-      <div class="badge" id="status">جاري الفحص...</div>
+      <div class="badge" id="status">جاهز — عدد الأصناف: 185 — الصرف: 1563</div>
     </div>
     <div class="tabs">
       <button class="tab active" id="customsBtn">وضع الجمارك</button>
@@ -91,13 +91,29 @@ function categoryFactor(label){ if(label==='5%') return 0.211; if(label==='10%')
 function normalize(s){ return (s||'').toString().trim().toLowerCase().replace(/[أإآٱ]/g,'ا').replace(/ى/g,'ي').replace(/ة/g,'ه').replace(/[\u0617-\u061A\u064B-\u0652]/g,'').replace(/\s+/g,' '); }
 function tokensFor(name, aliases, hs){ const arr=[name, hs, ...aliases]; return arr.map(normalize).filter(Boolean); }
 function addMsg(text, who='bot'){ const d=document.createElement('div'); d.className='msg '+who; d.textContent=text; chat.appendChild(d); chat.scrollTop=chat.scrollHeight; }
-function setMode(m){ mode=m; document.getElementById('customsBtn').classList.toggle('active',m==='customs'); document.getElementById('generalBtn').classList.toggle('active',m==='general'); document.getElementById('adminBtn').classList.remove('active'); document.getElementById('ownerSettingsBtn').classList.remove('active'); document.getElementById('chatView').classList.remove('hide'); document.getElementById('adminView').classList.add('hide'); document.getElementById('ownerSettingsView').classList.add('hide'); addMsg(m==='customs'?'تم تفعيل وضع الجمارك. اسألني عن جمارك أي صنف محفوظ.':'تم تفعيل الوضع العام. اسأل أي سؤال عام.','bot'); }
+
+function setMode(m){ 
+  mode=m; 
+  document.getElementById('customsBtn').classList.toggle('active',m==='customs'); 
+  document.getElementById('generalBtn').classList.toggle('active',m==='general'); 
+  document.getElementById('adminBtn').classList.toggle('active',m==='admin'); 
+  document.getElementById('ownerSettingsBtn').classList.toggle('active',m==='owner'); 
+  
+  document.getElementById('chatView').classList.toggle('hide', m==='admin' || m==='owner'); 
+  document.getElementById('adminView').classList.toggle('hide', m!=='admin'); 
+  document.getElementById('ownerSettingsView').classList.toggle('hide', m!=='owner'); 
+  
+  if(m==='customs') addMsg('تم تفعيل وضع الجمارك. اسألني عن جمارك أي صنف محفوظ.','bot');
+  if(m==='general') addMsg('تم تفعيل الوضع العام. اسأل أي سؤال عام.','bot');
+}
+
 async function send(){ const text=message.value.trim(); if(!text) return; message.value=''; addMsg(text,'user'); addMsg('جاري المعالجة...','bot'); const loading=chat.lastChild; try{ const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,mode,session_id:sessionId,extra_items:localItems(),use_search:true})}); const data=await r.json(); sessionId=data.session_id||sessionId; localStorage.setItem('sessionId', sessionId); loading.textContent=data.reply||'لا يوجد رد'; }catch(e){ loading.textContent='حدث خطأ في الاتصال: '+e.message; }}
 
 document.getElementById('send').onclick=send; message.addEventListener('keydown',e=>{ if(e.key==='Enter' && !e.shiftKey){e.preventDefault();send();}});
-document.getElementById('customsBtn').onclick=()=>setMode('customs'); document.getElementById('generalBtn').onclick=()=>setMode('general');
-document.getElementById('adminBtn').onclick=()=>{ document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active')); document.getElementById('adminBtn').classList.add('active'); document.getElementById('chatView').classList.add('hide'); document.getElementById('adminView').classList.remove('hide'); document.getElementById('ownerSettingsView').classList.add('hide'); renderLocalItems(); };
-document.getElementById('ownerSettingsBtn').onclick=()=>{ document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active')); document.getElementById('ownerSettingsBtn').classList.add('active'); document.getElementById('chatView').classList.add('hide'); document.getElementById('adminView').classList.add('hide'); document.getElementById('ownerSettingsView').classList.remove('hide'); document.getElementById('exchangeRateSettings').classList.add('hide'); document.getElementById('ownerPin').value=''; };
+document.getElementById('customsBtn').onclick=()=>setMode('customs'); 
+document.getElementById('generalBtn').onclick=()=>setMode('general');
+document.getElementById('adminBtn').onclick=()=>setMode('admin');
+document.getElementById('ownerSettingsBtn').onclick=()=>setMode('owner');
 
 document.getElementById('verifyPinBtn').onclick=async()=>{ const pin=document.getElementById('ownerPin').value; if(!pin){ alert('الرجاء إدخال رمز PIN'); return; } try{ const r=await fetch('/api/admin/verify_pin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin})}); const data=await r.json(); if(data.success){ document.getElementById('exchangeRateSettings').classList.remove('hide'); const rateRes=await fetch('/api/admin/exchange_rate'); const rateData=await rateRes.json(); document.getElementById('exchangeRateInput').value=rateData.exchange_rate; }else{ alert(data.message); } }catch(e){ alert('حدث خطأ في التحقق من PIN: '+e.message); } };
 
