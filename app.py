@@ -15,22 +15,23 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_FILE = BASE_DIR / "data" / "customs-backup-2026-06-09.json"
 EXCHANGE_RATE_CONFIG_FILE = BASE_DIR / "data" / "exchange_rate_config.json"
 
-
 app = FastAPI(title="Bassam Brain Customs Test")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 SESSIONS: Dict[str, Dict[str, Any]] = {}
-
 ARABIC_DIACRITICS = re.compile(r"[\u0617-\u061A\u064B-\u0652]")
-
 
 def load_exchange_rate_config() -> Dict[str, Any]:
     if not EXCHANGE_RATE_CONFIG_FILE.exists():
         return {"exchange_rate": 1563.0, "admin_pin": "bassam1234"}
-    with open(EXCHANGE_RATE_CONFIG_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(EXCHANGE_RATE_CONFIG_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"exchange_rate": 1563.0, "admin_pin": "bassam1234"}
 
 def save_exchange_rate_config(config: Dict[str, Any]):
+    EXCHANGE_RATE_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(EXCHANGE_RATE_CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=4)
 
@@ -39,14 +40,14 @@ def get_current_exchange_rate() -> float:
     return float(config.get("exchange_rate", 1563.0))
 
 def load_backup() -> Dict[str, Any]:
+    if not DATA_FILE.exists():
+        return {"items": []}
     with open(DATA_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
-
 
 def base_items() -> List[Dict[str, Any]]:
     data = load_backup()
     return [item for item in data.get("items", []) if item.get("status", "active") == "active"]
-
 
 def normalize_ar(text: Any) -> str:
     text = str(text or "").strip().lower()
@@ -62,7 +63,6 @@ def normalize_ar(text: Any) -> str:
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
-
 def item_text(item: Dict[str, Any]) -> str:
     fields = [
         item.get("name"), item.get("normalizedName"), item.get("hsCode"),
@@ -72,7 +72,6 @@ def item_text(item: Dict[str, Any]) -> str:
     fields.extend(item.get("aliases") or [])
     fields.extend(item.get("searchTokens") or [])
     return normalize_ar(" ".join(str(x or "") for x in fields))
-
 
 def score_item(query: str, item: Dict[str, Any]) -> int:
     q = normalize_ar(query)
@@ -97,7 +96,6 @@ def score_item(query: str, item: Dict[str, Any]) -> int:
         score += 100
     return score
 
-
 def search_items(query: str, items: Optional[List[Dict[str, Any]]] = None, limit: int = 8) -> List[Dict[str, Any]]:
     items = items or base_items()
     scored = []
@@ -108,12 +106,10 @@ def search_items(query: str, items: Optional[List[Dict[str, Any]]] = None, limit
     scored.sort(key=lambda x: x[0], reverse=True)
     return [x[1] for x in scored[:limit]]
 
-
 def extract_numbers(text: str) -> List[float]:
     text = normalize_ar(text).replace(",", ".")
     matches = re.findall(r"\d+(?:\.\d+)?", text)
     return [float(m) for m in matches]
-
 
 def classify_price_unit(price_unit: str) -> str:
     u = normalize_ar(price_unit)
@@ -135,7 +131,6 @@ def classify_price_unit(price_unit: str) -> str:
         return "pair_pack"
     return "piece"
 
-
 def unit_question(item: Dict[str, Any]) -> str:
     unit_type = classify_price_unit(item.get("priceUnit", ""))
     unit = item.get("priceUnit", "الوحدة")
@@ -155,7 +150,6 @@ def unit_question(item: Dict[str, Any]) -> str:
         return f"الصنف سعره حسب {unit}. كم عدد الكراتين؟"
     return f"الصنف سعره حسب {unit}. كم الكمية؟"
 
-
 def compute_units(item: Dict[str, Any], text: str) -> Tuple[Optional[float], str]:
     nums = extract_numbers(text)
     unit_type = classify_price_unit(item.get("priceUnit", ""))
@@ -164,7 +158,6 @@ def compute_units(item: Dict[str, Any], text: str) -> Tuple[Optional[float], str
     ntext = normalize_ar(text)
 
     if unit_type == "ampere":
-        # إذا وُجد رقم واحد فقط، قد يكون الإجمالي بالأمبير أو العدد فقط. نطلب توضيحًا.
         if len(nums) >= 2:
             return nums[0] * nums[1], f"إجمالي الأمبير = {nums[0]:g} × {nums[1]:g} = {nums[0] * nums[1]:g} أمبير"
         if "امبير" in ntext:
@@ -188,26 +181,31 @@ def compute_units(item: Dict[str, Any], text: str) -> Tuple[Optional[float], str
         return nums[0], f"الكمية = {nums[0]:g} كرتون"
     return nums[0], f"الكمية = {nums[0]:g}"
 
-
-def result_text(item: Dict[str, Any], units: float, units_note: str, original_query_text: str) -> str:
+def result_text(item: Dict[str, Any], units: float, units_note: str, original_query_text: str = "") -> str:
     price = float(item.get("usdPrice") or 0)
     factor = float(item.get("categoryFactor") or 0)
-    current_exchange_rate = get_current_exchange_rate()
-    total = price * units * current_exchange_rate * factor
-    return (
-        f"الصنف: {item.get(\'name\')}\n"
-        f"البند الجمركي: {item.get(\'hsCode\') or \'غير محدد\'}\n"
-        f"السعر المعتمد: {price:g} دولار لكل {item.get(\'priceUnit\') or \'وحدة\'}\n"
-        f"الكمية الأصلية: {original_query_text}\n"
-        f"{units_note}\n"
-        f"الفئة: {item.get(\'categoryLabel\') or \'\'}\n"
-        f"المعامل: {factor:g}\n"
-        f"سعر الصرف: {get_current_exchange_rate():g} ريال لكل دولار\n\n"
-        f"الحساب:\n"
-        f"{price:g} × {units:g} × {get_current_exchange_rate():g} × {factor:g} = {total:,.0f} ريال يمني\n\n"
-        f"النتيجة: جمارك {item.get(\'name\')} = {total:,.0f} ريال يمني تقريبًا."
-    )
-
+    rate = get_current_exchange_rate()
+    total = price * units * rate * factor
+    
+    lines = [
+        f"الصنف: {item.get('name')}",
+        f"البند الجمركي: {item.get('hsCode') or 'غير محدد'}",
+        f"السعر المعتمد: {price:g} دولار لكل {item.get('priceUnit') or 'وحدة'}"
+    ]
+    if original_query_text:
+        lines.append(f"الطلب الأصلي: {original_query_text}")
+    lines.extend([
+        f"{units_note}",
+        f"الفئة: {item.get('categoryLabel') or ''}",
+        f"المعامل: {factor:g}",
+        f"سعر الصرف: {rate:g} ريال لكل دولار",
+        "",
+        "الحساب:",
+        f"{price:g} × {units:g} × {rate:g} × {factor:g} = {total:,.0f} ريال يمني",
+        "",
+        f"النتيجة: جمارك {item.get('name')} = {total:,.0f} ريال يمني تقريبًا."
+    ])
+    return "\n".join(lines)
 
 def format_matches(matches: List[Dict[str, Any]]) -> str:
     lines = ["وجدت أكثر من صنف قريب. اختر الرقم المقصود:"]
@@ -217,153 +215,11 @@ def format_matches(matches: List[Dict[str, Any]]) -> str:
         )
     return "\n".join(lines)
 
-
 def get_session(session_id: Optional[str]) -> Tuple[str, Dict[str, Any]]:
     sid = session_id or str(uuid.uuid4())
     if sid not in SESSIONS:
         SESSIONS[sid] = {"created_at": time.time(), "mode": "customs"}
     return sid, SESSIONS[sid]
-
-
-async def customs_chat(message: str, session_id: Optional[str], extra_items: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
-    sid, session = get_session(session_id)
-    items = base_items() + (extra_items or [])
-    msg = message.strip()
-
-    # إذا كان المستخدم يختار صنفًا من قائمة سابقة
-    if session.get("step") == "select_item":
-        nums = extract_numbers(msg)
-        matches = session.get("matches") or []
-        if nums and 1 <= int(nums[0]) <= len(matches):
-            item = matches[int(nums[0]) - 1]
-            session.update({"step": "need_quantity", "selected_item": item})
-            return {"session_id": sid, "reply": f"تم اختيار: {item.get(\'name\')}\n{unit_question(item)}", "matches": []}
-        # ربما كتب الاسم بدل الرقم
-        new_matches = search_items(msg, matches, limit=3)
-        if len(new_matches) == 1:
-            item = new_matches[0]
-            session.update({"step": "need_quantity", "selected_item": item})
-            return {"session_id": sid, "reply": f"تم اختيار: {item.get(\'name\')}\n{unit_question(item)}", "matches": []}
-        return {"session_id": sid, "reply": "اكتب رقم الصنف من القائمة، مثل: 1 أو 2.", "matches": matches}
-
-    # إذا كان المستخدم يدخل الكمية للصنف المختار
-    if session.get("step") == "need_quantity" and session.get("selected_item"):
-        item = session["selected_item"]
-        units, note = compute_units(item, msg)
-        if units is None:
-            # إذا لم يتمكن من حساب الكمية من الاستعلام الأولي، نطلب توضيحًا
-            return {"session_id": sid, "reply": note, "matches": []}
-        session.clear()
-        session.update({"created_at": time.time(), "mode": "customs"})
-        return {"session_id": sid, "reply": result_text(item, units, note), "matches": []}
-
-    # تحليل استعلام المستخدم باستخدام LLM
-    parsed_query = await parse_customs_query_with_llm(msg)
-    item_query = parsed_query.get("item_query")
-    quantity = parsed_query.get("quantity")
-    unit = parsed_query.get("unit")
-    package_count = parsed_query.get("package_count")
-    units_per_package = parsed_query.get("units_per_package")
-    capacity = parsed_query.get("capacity")
-    capacity_unit = parsed_query.get("capacity_unit")
-    missing_fields = parsed_query.get("missing_fields", [])
-
-    # إذا كانت هناك حقول ناقصة، اطلب من المستخدم توضيحها
-    if missing_fields:
-        reply_msg = "يبدو أن بعض المعلومات ناقصة. "
-        if "item_query" in missing_fields:
-            reply_msg += "ما هو الصنف الذي تسأل عنه؟ "
-        if "quantity" in missing_fields or "unit" in missing_fields:
-            reply_msg += "وكم الكمية والوحدة؟ "
-        if "capacity" in missing_fields or "capacity_unit" in missing_fields:
-            reply_msg += "وما هي السعة ووحدتها (مثل أمبير، واط)؟ "
-        return {"session_id": sid, "reply": reply_msg.strip(), "matches": []}
-
-    # البحث عن الأصناف بناءً على item_query من LLM
-    matches = search_items(item_query or msg, items, limit=6)
-    if not matches:
-        return {
-            "session_id": sid,
-            "reply": "لم أجد هذا الصنف في قاعدة بيانات الجمارك. هل تريد البحث العام أو إضافته كصنف جديد من تبويب إدارة الأصناف؟",
-            "matches": []
-        }
-
-    # إذا أفضل نتيجة أعلى بكثير من الثانية، اخترها. وإلا اعرض الخيارات.
-    if len(matches) == 1 or (len(matches) > 1 and score_item(item_query or msg, matches[0]) >= score_item(item_query or msg, matches[1]) + 45):
-        item = matches[0]
-        # حساب الكمية المحسوبة بناءً على تحليل LLM
-        calculated_units = None
-        units_note = ""
-
-        if package_count and units_per_package:
-            calculated_units = package_count * units_per_package
-            units_note = f"فهمت منك: {package_count:g} {unit or 'طرد'} × {units_per_package:g} {unit or 'وحدة'} = {calculated_units:g} {unit or 'وحدة'}"
-        elif quantity and capacity:
-            calculated_units = quantity * capacity
-            units_note = f"فهمت منك: {quantity:g} {unit or 'عدد'} × {capacity:g} {capacity_unit or 'سعة'} = {calculated_units:g} {capacity_unit or 'إجمالي'}"
-        elif quantity:
-            calculated_units = quantity
-            units_note = f"فهمت منك: {quantity:g} {unit or 'وحدة'}"
-
-        # إذا تم استخراج الكمية المحسوبة من LLM، نستخدمها مباشرة
-        if calculated_units is not None:
-            session.clear()
-            session.update({"created_at": time.time(), "mode": "customs"})
-            return {"session_id": sid, "reply": result_text(item, calculated_units, units_note, msg), "matches": []}
-        # إذا لم يتم استخراج الكمية المحسوبة من LLM، نطلب من المستخدم توضيحًا
-        else:
-            session.update({"step": "need_quantity", "selected_item": item})
-            return {"session_id": sid, "reply": f"وجدت الصنف: {item.get(\'name\')}\n{unit_question(item)}", "matches": [item]}
-
-    session.update({"step": "select_item", "matches": matches})
-    return {"session_id": sid, "reply": format_matches(matches), "matches": matches}
-
-
-async def general_chat(message: str, use_search: bool = True) -> str:
-        nums = extract_numbers(msg)
-        matches = session.get("matches") or []
-        if nums and 1 <= int(nums[0]) <= len(matches):
-            item = matches[int(nums[0]) - 1]
-            session.update({"step": "need_quantity", "selected_item": item})
-            return {"session_id": sid, "reply": f"تم اختيار: {item.get('name')}\n{unit_question(item)}", "matches": []}
-        # ربما كتب الاسم بدل الرقم
-        new_matches = search_items(msg, matches, limit=3)
-        if len(new_matches) == 1:
-            item = new_matches[0]
-            session.update({"step": "need_quantity", "selected_item": item})
-            return {"session_id": sid, "reply": f"تم اختيار: {item.get('name')}\n{unit_question(item)}", "matches": []}
-        return {"session_id": sid, "reply": "اكتب رقم الصنف من القائمة، مثل: 1 أو 2.", "matches": matches}
-
-    # إدخال الكمية للصنف المختار
-    if session.get("step") == "need_quantity" and session.get("selected_item"):
-        item = session["selected_item"]
-        units, note = compute_units(item, msg)
-        if units is None:
-            return {"session_id": sid, "reply": note, "matches": []}
-        session.clear()
-        session.update({"created_at": time.time(), "mode": "customs"})
-        return {"session_id": sid, "reply": result_text(item, units, note), "matches": []}
-
-    matches = search_items(msg, items, limit=6)
-    if not matches:
-        return {
-            "session_id": sid,
-            "reply": "لم أجد هذا الصنف في قاعدة بيانات الجمارك. هل تريد البحث العام أو إضافته كصنف جديد من تبويب إدارة الأصناف؟",
-            "matches": []
-        }
-
-    # إذا أفضل نتيجة أعلى بكثير من الثانية، اخترها. وإلا اعرض الخيارات.
-    if len(matches) == 1 or score_item(msg, matches[0]) >= score_item(msg, matches[1]) + 45:
-        item = matches[0]
-        units, note = compute_units(item, msg)
-        if units is not None:
-            return {"session_id": sid, "reply": result_text(item, units, note, msg), "matches": []}
-        session.update({"step": "need_quantity", "selected_item": item})
-        return {"session_id": sid, "reply": f"وجدت الصنف: {item.get('name')}\n{unit_question(item)}", "matches": [item]}
-
-    session.update({"step": "select_item", "matches": matches})
-    return {"session_id": sid, "reply": format_matches(matches), "matches": matches}
-
 
 async def google_search_serper(query: str) -> str:
     key = os.getenv("SERPER_API_KEY")
@@ -385,7 +241,6 @@ async def google_search_serper(query: str) -> str:
     except Exception:
         return ""
 
-
 async def call_groq(prompt: str, search_context: str = "") -> Optional[str]:
     key = os.getenv("GROQ_API_KEY")
     if not key:
@@ -406,7 +261,6 @@ async def call_groq(prompt: str, search_context: str = "") -> Optional[str]:
             return r.json()["choices"][0]["message"]["content"]
     except Exception as e:
         return f"تعذر الاتصال بـ Groq حاليًا: {e}"
-
 
 async def call_anthropic(prompt: str, search_context: str = "") -> Optional[str]:
     key = os.getenv("ANTHROPIC_API_KEY")
@@ -432,73 +286,91 @@ async def call_anthropic(prompt: str, search_context: str = "") -> Optional[str]
     except Exception as e:
         return f"تعذر الاتصال بـ Anthropic حاليًا: {e}"
 
-
 async def parse_customs_query_with_llm(query: str) -> Dict[str, Any]:
     prompt = f"""حلل استعلام الجمارك التالي واستخرج منه المعلومات المطلوبة في صيغة JSON. إذا كانت المعلومة غير موجودة، اترك الحقل فارغًا أو null. لا تخترع معلومات.
-
-الاستعلام: {query}
-
-المعلومات المطلوبة:
-- item_query: اسم السلعة أو وصفها (مثال: بطاريات ليثيوم، ملابس ولادي)
-- quantity: العدد الإجمالي للوحدات (مثال: 5، 100)
-- unit: وحدة الكمية (مثال: حبة، درزن، طن، كيلو)
-- package_count: عدد الطرود/الكراتين (مثال: 5، 2)
-- units_per_package: العدد داخل كل طرد أو كرتون (مثال: 3، 12)
-- capacity: السعة (مثال: 100، 550)
-- capacity_unit: وحدة السعة (مثال: أمبير، واط)
-- missing_fields: قائمة بالحقول الناقصة الضرورية للحساب (مثال: ["quantity", "capacity"])
-
-أمثلة:
-- معي 5 طرد ملابس، كل طرد 3 درزن
-  {{"item_query": "ملابس", "quantity": null, "unit": "درزن", "package_count": 5, "units_per_package": 3, "capacity": null, "capacity_unit": null, "missing_fields": []}}
-- كم على بطاريات؟
-  {{"item_query": "بطاريات", "quantity": null, "unit": null, "package_count": null, "units_per_package": null, "capacity": null, "capacity_unit": null, "missing_fields": ["item_query", "quantity", "unit", "capacity", "capacity_unit"]}}
-- معي بطارية ليثيوم 100 أمبير عدد 4
-  {{"item_query": "بطارية ليثيوم", "quantity": 4, "unit": "عدد", "package_count": null, "units_per_package": null, "capacity": 100, "capacity_unit": "أمبير", "missing_fields": []}}
-- عندي كرتونين لمبات، كل كرتون 12 حبة
-  {{"item_query": "لمبات", "quantity": null, "unit": "حبة", "package_count": 2, "units_per_package": 12, "capacity": null, "capacity_unit": null, "missing_fields": []}}
-- كم جمارك طقم دش؟
-  {{"item_query": "طقم دش", "quantity": null, "unit": null, "package_count": null, "units_per_package": null, "capacity": null, "capacity_unit": null, "missing_fields": ["quantity", "unit"]}}
-- معي ألواح 550 واط عدد 6
-  {{"item_query": "ألواح", "quantity": 6, "unit": "عدد", "package_count": null, "units_per_package": null, "capacity": 550, "capacity_unit": "واط", "missing_fields": []}}
-- عندي بضاعة ملابس أطفال 5 كراتين
-  {{"item_query": "ملابس أطفال", "quantity": 5, "unit": "كراتين", "package_count": null, "units_per_package": null, "capacity": null, "capacity_unit": null, "missing_fields": []}}
-- كم تدفع على 2 طن ورق؟
-  {{"item_query": "ورق", "quantity": 2, "unit": "طن", "package_count": null, "units_per_package": null, "capacity": null, "capacity_unit": null, "missing_fields": []}}
-
-الآن حلل الاستعلام التالي:
 الاستعلام: {query}
 الناتج بصيغة JSON فقط:
-"""
+{{
+  "item_query": "اسم السلعة",
+  "quantity": null,
+  "unit": "الوحدة",
+  "package_count": null,
+  "units_per_package": null,
+  "capacity": null,
+  "capacity_unit": "الوحدة",
+  "missing_fields": []
+}}"""
     response = await call_groq(prompt)
-    if response is None:
+    if not response or "تعذر الاتصال" in response:
         response = await call_anthropic(prompt)
-
+    
     if response:
         try:
-            # LLM قد يضيف نصًا قبل أو بعد الـ JSON، لذا نحاول استخراج الـ JSON فقط
-            json_match = re.search(r"```json\n(.*?)```", response, re.DOTALL)
+            json_match = re.search(r"(\{.*\})", response, re.DOTALL)
             if json_match:
                 return json.loads(json_match.group(1))
             return json.loads(response)
-        except json.JSONDecodeError:
-            print(f"Failed to decode JSON from LLM: {response}")
+        except Exception:
             return {}
     return {}
 
+async def customs_chat(message: str, session_id: Optional[str], extra_items: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    sid, session = get_session(session_id)
+    items = base_items() + (extra_items or [])
+    msg = message.strip()
+
+    if session.get("step") == "select_item":
+        nums = extract_numbers(msg)
+        matches = session.get("matches") or []
+        if nums and 1 <= int(nums[0]) <= len(matches):
+            item = matches[int(nums[0]) - 1]
+            session.update({"step": "need_quantity", "selected_item": item})
+            return {"session_id": sid, "reply": f"تم اختيار: {item.get('name')}\n{unit_question(item)}", "matches": []}
+        new_matches = search_items(msg, matches, limit=3)
+        if len(new_matches) == 1:
+            item = new_matches[0]
+            session.update({"step": "need_quantity", "selected_item": item})
+            return {"session_id": sid, "reply": f"تم اختيار: {item.get('name')}\n{unit_question(item)}", "matches": []}
+        return {"session_id": sid, "reply": "اكتب رقم الصنف من القائمة، مثل: 1 أو 2.", "matches": matches}
+
+    if session.get("step") == "need_quantity" and session.get("selected_item"):
+        item = session["selected_item"]
+        units, note = compute_units(item, msg)
+        if units is None:
+            return {"session_id": sid, "reply": note, "matches": []}
+        session.clear()
+        session.update({"created_at": time.time(), "mode": "customs"})
+        return {"session_id": sid, "reply": result_text(item, units, note), "matches": []}
+
+    parsed = await parse_customs_query_with_llm(msg)
+    item_query = parsed.get("item_query") or msg
+    matches = search_items(item_query, items, limit=6)
+    
+    if not matches:
+        return {"session_id": sid, "reply": "لم أجد هذا الصنف. حاول كتابة اسم الصنف بوضوح.", "matches": []}
+
+    if len(matches) == 1 or (len(matches) > 1 and score_item(item_query, matches[0]) >= score_item(item_query, matches[1]) + 45):
+        item = matches[0]
+        units, note = compute_units(item, msg)
+        if units is not None:
+            return {"session_id": sid, "reply": result_text(item, units, note, msg), "matches": []}
+        session.update({"step": "need_quantity", "selected_item": item})
+        return {"session_id": sid, "reply": f"وجدت الصنف: {item.get('name')}\n{unit_question(item)}", "matches": [item]}
+
+    session.update({"step": "select_item", "matches": matches})
+    return {"session_id": sid, "reply": format_matches(matches), "matches": matches}
 
 async def general_chat(message: str, use_search: bool = True) -> str:
     search_context = await google_search_serper(message) if use_search else ""
     reply = await call_groq(message, search_context)
-    if reply:
+    if reply and "تعذر الاتصال" not in reply:
         return reply
     reply = await call_anthropic(message, search_context)
-    if reply:
+    if reply and "تعذر الاتصال" not in reply:
         return reply
     if search_context:
-        return "لم يتم ضبط مفاتيح Groq أو Anthropic، لكن هذه نتائج بحث أولية:\n" + search_context
-    return "الوضع العام يحتاج إضافة مفتاح GROQ_API_KEY أو ANTHROPIC_API_KEY في Secrets. أما وضع الجمارك فيعمل من ملف الأصناف بدون مفاتيح."
-
+        return "نتائج البحث المتاحة:\n" + search_context
+    return "الوضع العام يحتاج مفاتيح API. وضع الجمارك يعمل بدونها."
 
 @app.post("/api/admin/verify_pin")
 async def verify_admin_pin(payload: Dict[str, str] = Body(...)) -> JSONResponse:
@@ -529,19 +401,11 @@ async def update_admin_exchange_rate(payload: Dict[str, Any] = Body(...)) -> JSO
 
 @app.get("/api/health")
 async def health_check() -> JSONResponse:
-    items = base_items()
-    exchange_rate = get_current_exchange_rate()
-    return JSONResponse({"status": "ok", "items": len(items), "exchange_rate": exchange_rate})
+    return JSONResponse({"status": "ok", "items": len(base_items()), "exchange_rate": get_current_exchange_rate()})
 
 @app.get("/")
 def index():
     return FileResponse(BASE_DIR / "static" / "index.html")
-
-
-@app.get("/api/health")
-def health():
-    return {"ok": True, "items": len(base_items()), "exchange_rate": EXCHANGE_RATE}
-
 
 @app.get("/api/customs/items")
 def api_items(q: str = ""):
@@ -549,14 +413,15 @@ def api_items(q: str = ""):
         return {"items": search_items(q, base_items(), limit=20)}
     return {"items": base_items()}
 
-
 @app.post("/api/chat")
 async def api_chat(payload: Dict[str, Any] = Body(...)):
     message = str(payload.get("message") or "")
     mode = payload.get("mode") or "customs"
     session_id = payload.get("session_id")
     extra_items = payload.get("extra_items") or []
+    
     if mode == "customs":
-        return customs_chat(message, session_id, extra_items=extra_items)
+        return await customs_chat(message, session_id, extra_items=extra_items)
+    
     reply = await general_chat(message, use_search=bool(payload.get("use_search", True)))
     return {"session_id": session_id or str(uuid.uuid4()), "reply": reply, "matches": []}
