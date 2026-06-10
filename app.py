@@ -38,7 +38,7 @@ def get_current_exchange_rate() -> float:
     config = load_exchange_rate_config()
     return float(config.get("exchange_rate", 1563.0))
 
-def load_backup() -> Dict[str, Any>:
+def load_backup() -> Dict[str, Any]:
     with open(DATA_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
