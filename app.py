@@ -150,38 +150,105 @@ def unit_question(item: Dict[str, Any]) -> str:
         return f"الصنف سعره حسب {unit}. كم عدد الكراتين؟"
     return f"الصنف سعره حسب {unit}. كم الكمية؟"
 
-def compute_units(item: Dict[str, Any], text: str) -> Tuple[Optional[float], str]:
+def compute_units(item: Dict[str, Any], text: str) -> Tuple[Optional[float], str, Optional[str]]:
     nums = extract_numbers(text)
     unit_type = classify_price_unit(item.get("priceUnit", ""))
     if not nums:
-        return None, unit_question(item)
+        return None, unit_question(item), None
     ntext = normalize_ar(text)
 
     if unit_type == "ampere":
         if len(nums) >= 2:
-            return nums[0] * nums[1], f"إجمالي الأمبير = {nums[0]:g} × {nums[1]:g} = {nums[0] * nums[1]:g} أمبير"
+            return nums[0] * nums[1], f"إجمالي الأمبير = {nums[0]:g} × {nums[1]:g} = {nums[0] * nums[1]:g} أمبير", None
         if "امبير" in ntext:
-            return nums[0], f"إجمالي الأمبير = {nums[0]:g} أمبير"
-        return None, "كم أمبير كل بطارية؟ اكتب مثلًا: 100 أمبير لكل واحدة، أو اكتب الإجمالي بالأمبير."
+            return nums[0], f"إجمالي الأمبير = {nums[0]:g} أمبير", None
+        return None, "كم أمبير كل بطارية؟ اكتب مثلًا: 100 أمبير لكل واحدة، أو اكتب الإجمالي بالأمبير.", None
 
     if unit_type == "watt":
         if len(nums) >= 2 and ("لوح" in ntext or "الواح" in ntext):
-            return nums[0] * nums[1], f"إجمالي الواط = {nums[0]:g} × {nums[1]:g} = {nums[0] * nums[1]:g} وات"
-        return nums[0], f"إجمالي الواط = {nums[0]:g} وات"
+            return nums[0] * nums[1], f"إجمالي الواط = {nums[0]:g} × {nums[1]:g} = {nums[0] * nums[1]:g} وات", None
+        return nums[0], f"إجمالي الواط = {nums[0]:g} وات", None
 
     if unit_type == "kw":
-        return nums[0], f"إجمالي الكيلو وات = {nums[0]:g} كيلو وات"
+        return nums[0], f"إجمالي الكيلو وات = {nums[0]:g} كيلو وات", None
     if unit_type == "ton":
-        return nums[0], f"الكمية = {nums[0]:g} طن"
+        return nums[0], f"الكمية = {nums[0]:g} طن", None
     if unit_type == "kg":
-        return nums[0], f"الكمية = {nums[0]:g} كيلو"
+        return nums[0], f"الكمية = {nums[0]:g} كيلو", None
     if unit_type == "liter":
-        return nums[0], f"الكمية = {nums[0]:g} لتر"
+        return nums[0], f"الكمية = {nums[0]:g} لتر", None
     if unit_type == "carton":
-        return nums[0], f"الكمية = {nums[0]:g} كرتون"
-    return nums[0], f"الكمية = {nums[0]:g}"
+        return nums[0], f"الكمية = {nums[0]:g} كرتون", None
+    # New logic for handling cartons/parcels/boxes with internal units
+    package_words = ["كرتون", "كرتونين", "كراتين", "طرد", "طرود", "صندوق", "صناديق"]
+    if any(word in ntext for word in package_words):
+        package_count = 0
+        package_word = ""
+        for word in package_words:
+            match = re.search(r"(\d+)\s*" + word, ntext)
+            if match:
+                package_count = float(match.group(1))
+                package_word = word
+                break
+        
+        if package_count > 0:
+            # Check for internal units like dozen, pair, piece
+            internal_unit_match = re.search(r"(\d+)\s*(درزن|دزينة|زوج|أزواج|حبة|قطعة)", ntext)
+            if internal_unit_match:
+                internal_quantity = float(internal_unit_match.group(1))
+                internal_unit_type = internal_unit_match.group(2)
+                
+                # Convert to base units based on item's priceUnit
+                item_price_unit_normalized = normalize_ar(item.get("priceUnit", ""))
+                
+                calculated_units = 0
+                calculation_note = ""
+                
+                if "درزن" in item_price_unit_normalized or "دزينة" in item_price_unit_normalized or "12 زوج" in item_price_unit_normalized:
+                    if "درزن" in internal_unit_type or "دزينة" in internal_unit_type:
+                        calculated_units = package_count * internal_quantity
+                        calculation_note = f"{package_count:g} {package_word} × {internal_quantity:g} {internal_unit_type} = {calculated_units:g} درزن"
+                    elif "زوج" in internal_unit_type or "أزواج" in internal_unit_type:
+                        calculated_units = package_count * internal_quantity / 12  # 1 dozen pairs = 12 pairs
+                        calculation_note = f"{package_count:g} {package_word} × {internal_quantity:g} {internal_unit_type} = {calculated_units:g} درزن"
+                    elif "حبة" in internal_unit_type or "قطعة" in internal_unit_type:
+                        calculated_units = package_count * internal_quantity / 24 # 1 dozen pairs = 24 pieces
+                        calculation_note = f"{package_count:g} {package_word} × {internal_quantity:g} {internal_unit_type} = {calculated_units:g} درزن"
+                
+                elif "زوج" in item_price_unit_normalized or "أزواج" in item_price_unit_normalized:
+                    if "درزن" in internal_unit_type or "دزينة" in internal_unit_type:
+                        calculated_units = package_count * internal_quantity * 12 # 1 dozen pairs = 12 pairs
+                        calculation_note = f"{package_count:g} {package_word} × {internal_quantity:g} {internal_unit_type} = {calculated_units:g} زوج"
+                    elif "زوج" in internal_unit_type or "أزواج" in internal_unit_type:
+                        calculated_units = package_count * internal_quantity
+                        calculation_note = f"{package_count:g} {package_word} × {internal_quantity:g} {internal_unit_type} = {calculated_units:g} زوج"
+                    elif "حبة" in internal_unit_type or "قطعة" in internal_unit_type:
+                        calculated_units = package_count * internal_quantity / 2 # 1 pair = 2 pieces
+                        calculation_note = f"{package_count:g} {package_word} × {internal_quantity:g} {internal_unit_type} = {calculated_units:g} زوج"
+                
+                elif "حبة" in item_price_unit_normalized or "قطعة" in item_price_unit_normalized:
+                    if "درزن" in internal_unit_type or "دزينة" in internal_unit_type:
+                        calculated_units = package_count * internal_quantity * 12 # 1 dozen = 12 pieces
+                        calculation_note = f"{package_count:g} {package_word} × {internal_quantity:g} {internal_unit_type} = {calculated_units:g} حبة"
+                    elif "زوج" in internal_unit_type or "أزواج" in internal_unit_type:
+                        calculated_units = package_count * internal_quantity * 2 # 1 pair = 2 pieces
+                        calculation_note = f"{package_count:g} {package_word} × {internal_quantity:g} {internal_unit_type} = {calculated_units:g} حبة"
+                    elif "حبة" in internal_unit_type or "قطعة" in internal_unit_type:
+                        calculated_units = package_count * internal_quantity
+                        calculation_note = f"{package_count:g} {package_word} × {internal_quantity:g} {internal_unit_type} = {calculated_units:g} حبة"
+                
+                if calculated_units > 0:
+                    return calculated_units, f"الكمية المحسوبة: {calculated_units:g} وحدة من {item.get('priceUnit', '')}", calculation_note
+            
+            # If package count is given but internal units are not, ask for clarification
+            item_price_unit_normalized = normalize_ar(item.get("priceUnit", ""))
+            if any(u in item_price_unit_normalized for u in ["درزن", "دزينة", "زوج", "أزواج", "حبة", "قطعة", "12 زوج"]):
+                return None, f"كم داخل كل {package_word}؟ هل العدد بالدرزن أم بالزوج أم بالحبة؟", None
 
-def result_text(item: Dict[str, Any], units: float, units_note: str, original_query_text: str = "") -> str:
+    # Existing logic for simple quantities
+    return nums[0], f"الكمية = {nums[0]:g}", None
+
+def result_text(item: Dict[str, Any], units: float, units_note: str, original_query_text: str = "", calculation_details: Optional[str] = None) -> str:
     price = float(item.get("usdPrice") or 0)
     factor = float(item.get("categoryFactor") or 0)
     rate = get_current_exchange_rate()
@@ -195,6 +262,7 @@ def result_text(item: Dict[str, Any], units: float, units_note: str, original_qu
     if original_query_text:
         lines.append(f"الطلب الأصلي: {original_query_text}")
     lines.extend([
+        f"طريقة الفهم: {calculation_details}",
         f"{units_note}",
         f"الفئة: {item.get('categoryLabel') or ''}",
         f"المعامل: {factor:g}",
@@ -335,14 +403,17 @@ async def customs_chat(message: str, session_id: Optional[str], extra_items: Opt
 
     if session.get("step") == "need_quantity" and session.get("selected_item"):
         item = session["selected_item"]
-        units, note = compute_units(item, msg)
+        units, note, calculation_details = compute_units(item, msg)
         if units is None:
+            session["original_query_text"] = msg # Store original query for later use
             return {"session_id": sid, "reply": note, "matches": []}
+        original_query_text = session.pop("original_query_text", "")
         session.clear()
         session.update({"created_at": time.time(), "mode": "customs"})
-        return {"session_id": sid, "reply": result_text(item, units, note), "matches": []}
+        return {"session_id": sid, "reply": result_text(item, units, note, original_query_text, calculation_details), "matches": []}
 
     parsed = await parse_customs_query_with_llm(msg)
+    session["original_query_text"] = msg # Store original query for later use
     item_query = parsed.get("item_query") or msg
     matches = search_items(item_query, items)
     
@@ -351,9 +422,9 @@ async def customs_chat(message: str, session_id: Optional[str], extra_items: Opt
 
     if len(matches) == 1 or (len(matches) > 1 and score_item(item_query, matches[0]) >= score_item(item_query, matches[1]) + 45):
         item = matches[0]
-        units, note = compute_units(item, msg)
+        units, note, calculation_details = compute_units(item, msg)
         if units is not None:
-            return {"session_id": sid, "reply": result_text(item, units, note, msg), "matches": []}
+            return {"session_id": sid, "reply": result_text(item, units, note, msg, calculation_details), "matches": []}
         session.update({"step": "need_quantity", "selected_item": item})
         return {"session_id": sid, "reply": f"وجدت الصنف: {item.get('name')}\n{unit_question(item)}", "matches": [item]}
 
