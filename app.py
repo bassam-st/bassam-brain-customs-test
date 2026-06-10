@@ -13,7 +13,8 @@ from fastapi.staticfiles import StaticFiles
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_FILE = BASE_DIR / "data" / "customs-backup-2026-06-09.json"
-EXCHANGE_RATE = float(os.getenv("CUSTOMS_EXCHANGE_RATE", "750"))
+EXCHANGE_RATE_CONFIG_FILE = BASE_DIR / "data" / "exchange_rate_config.json"
+
 
 app = FastAPI(title="Bassam Brain Customs Test")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
@@ -23,7 +24,21 @@ SESSIONS: Dict[str, Dict[str, Any]] = {}
 ARABIC_DIACRITICS = re.compile(r"[\u0617-\u061A\u064B-\u0652]")
 
 
-def load_backup() -> Dict[str, Any]:
+def load_exchange_rate_config() -> Dict[str, Any]:
+    if not EXCHANGE_RATE_CONFIG_FILE.exists():
+        return {"exchange_rate": 1563.0, "admin_pin": "bassam1234"}
+    with open(EXCHANGE_RATE_CONFIG_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_exchange_rate_config(config: Dict[str, Any]):
+    with open(EXCHANGE_RATE_CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=4)
+
+def get_current_exchange_rate() -> float:
+    config = load_exchange_rate_config()
+    return float(config.get("exchange_rate", 1563.0))
+
+def load_backup() -> Dict[str, Any>:
     with open(DATA_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -174,21 +189,23 @@ def compute_units(item: Dict[str, Any], text: str) -> Tuple[Optional[float], str
     return nums[0], f"الكمية = {nums[0]:g}"
 
 
-def result_text(item: Dict[str, Any], units: float, units_note: str) -> str:
+def result_text(item: Dict[str, Any], units: float, units_note: str, original_query_text: str) -> str:
     price = float(item.get("usdPrice") or 0)
     factor = float(item.get("categoryFactor") or 0)
-    total = price * units * EXCHANGE_RATE * factor
+    current_exchange_rate = get_current_exchange_rate()
+    total = price * units * current_exchange_rate * factor
     return (
-        f"الصنف: {item.get('name')}\n"
-        f"البند الجمركي: {item.get('hsCode') or 'غير محدد'}\n"
-        f"السعر المعتمد: {price:g} دولار لكل {item.get('priceUnit') or 'وحدة'}\n"
+        f"الصنف: {item.get(\'name\')}\n"
+        f"البند الجمركي: {item.get(\'hsCode\') or \'غير محدد\'}\n"
+        f"السعر المعتمد: {price:g} دولار لكل {item.get(\'priceUnit\') or \'وحدة\'}\n"
+        f"الكمية الأصلية: {original_query_text}\n"
         f"{units_note}\n"
-        f"الفئة: {item.get('categoryLabel') or ''}\n"
+        f"الفئة: {item.get(\'categoryLabel\') or \'\'}\n"
         f"المعامل: {factor:g}\n"
-        f"سعر الصرف: {EXCHANGE_RATE:g} ريال لكل دولار\n\n"
+        f"سعر الصرف: {get_current_exchange_rate():g} ريال لكل دولار\n\n"
         f"الحساب:\n"
-        f"{price:g} × {units:g} × {EXCHANGE_RATE:g} × {factor:g} = {total:,.0f} ريال يمني\n\n"
-        f"النتيجة: جمارك {item.get('name')} = {total:,.0f} ريال يمني تقريبًا."
+        f"{price:g} × {units:g} × {get_current_exchange_rate():g} × {factor:g} = {total:,.0f} ريال يمني\n\n"
+        f"النتيجة: جمارك {item.get(\'name\')} = {total:,.0f} ريال يمني تقريبًا."
     )
 
 
@@ -208,13 +225,101 @@ def get_session(session_id: Optional[str]) -> Tuple[str, Dict[str, Any]]:
     return sid, SESSIONS[sid]
 
 
-def customs_chat(message: str, session_id: Optional[str], extra_items: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+async def customs_chat(message: str, session_id: Optional[str], extra_items: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     sid, session = get_session(session_id)
     items = base_items() + (extra_items or [])
     msg = message.strip()
 
-    # اختيار صنف من قائمة سابقة
+    # إذا كان المستخدم يختار صنفًا من قائمة سابقة
     if session.get("step") == "select_item":
+        nums = extract_numbers(msg)
+        matches = session.get("matches") or []
+        if nums and 1 <= int(nums[0]) <= len(matches):
+            item = matches[int(nums[0]) - 1]
+            session.update({"step": "need_quantity", "selected_item": item})
+            return {"session_id": sid, "reply": f"تم اختيار: {item.get(\'name\')}\n{unit_question(item)}", "matches": []}
+        # ربما كتب الاسم بدل الرقم
+        new_matches = search_items(msg, matches, limit=3)
+        if len(new_matches) == 1:
+            item = new_matches[0]
+            session.update({"step": "need_quantity", "selected_item": item})
+            return {"session_id": sid, "reply": f"تم اختيار: {item.get(\'name\')}\n{unit_question(item)}", "matches": []}
+        return {"session_id": sid, "reply": "اكتب رقم الصنف من القائمة، مثل: 1 أو 2.", "matches": matches}
+
+    # إذا كان المستخدم يدخل الكمية للصنف المختار
+    if session.get("step") == "need_quantity" and session.get("selected_item"):
+        item = session["selected_item"]
+        units, note = compute_units(item, msg)
+        if units is None:
+            # إذا لم يتمكن من حساب الكمية من الاستعلام الأولي، نطلب توضيحًا
+            return {"session_id": sid, "reply": note, "matches": []}
+        session.clear()
+        session.update({"created_at": time.time(), "mode": "customs"})
+        return {"session_id": sid, "reply": result_text(item, units, note), "matches": []}
+
+    # تحليل استعلام المستخدم باستخدام LLM
+    parsed_query = await parse_customs_query_with_llm(msg)
+    item_query = parsed_query.get("item_query")
+    quantity = parsed_query.get("quantity")
+    unit = parsed_query.get("unit")
+    package_count = parsed_query.get("package_count")
+    units_per_package = parsed_query.get("units_per_package")
+    capacity = parsed_query.get("capacity")
+    capacity_unit = parsed_query.get("capacity_unit")
+    missing_fields = parsed_query.get("missing_fields", [])
+
+    # إذا كانت هناك حقول ناقصة، اطلب من المستخدم توضيحها
+    if missing_fields:
+        reply_msg = "يبدو أن بعض المعلومات ناقصة. "
+        if "item_query" in missing_fields:
+            reply_msg += "ما هو الصنف الذي تسأل عنه؟ "
+        if "quantity" in missing_fields or "unit" in missing_fields:
+            reply_msg += "وكم الكمية والوحدة؟ "
+        if "capacity" in missing_fields or "capacity_unit" in missing_fields:
+            reply_msg += "وما هي السعة ووحدتها (مثل أمبير، واط)؟ "
+        return {"session_id": sid, "reply": reply_msg.strip(), "matches": []}
+
+    # البحث عن الأصناف بناءً على item_query من LLM
+    matches = search_items(item_query or msg, items, limit=6)
+    if not matches:
+        return {
+            "session_id": sid,
+            "reply": "لم أجد هذا الصنف في قاعدة بيانات الجمارك. هل تريد البحث العام أو إضافته كصنف جديد من تبويب إدارة الأصناف؟",
+            "matches": []
+        }
+
+    # إذا أفضل نتيجة أعلى بكثير من الثانية، اخترها. وإلا اعرض الخيارات.
+    if len(matches) == 1 or (len(matches) > 1 and score_item(item_query or msg, matches[0]) >= score_item(item_query or msg, matches[1]) + 45):
+        item = matches[0]
+        # حساب الكمية المحسوبة بناءً على تحليل LLM
+        calculated_units = None
+        units_note = ""
+
+        if package_count and units_per_package:
+            calculated_units = package_count * units_per_package
+            units_note = f"فهمت منك: {package_count:g} {unit or 'طرد'} × {units_per_package:g} {unit or 'وحدة'} = {calculated_units:g} {unit or 'وحدة'}"
+        elif quantity and capacity:
+            calculated_units = quantity * capacity
+            units_note = f"فهمت منك: {quantity:g} {unit or 'عدد'} × {capacity:g} {capacity_unit or 'سعة'} = {calculated_units:g} {capacity_unit or 'إجمالي'}"
+        elif quantity:
+            calculated_units = quantity
+            units_note = f"فهمت منك: {quantity:g} {unit or 'وحدة'}"
+
+        # إذا تم استخراج الكمية المحسوبة من LLM، نستخدمها مباشرة
+        if calculated_units is not None:
+            session.clear()
+            session.update({"created_at": time.time(), "mode": "customs"})
+            return {"session_id": sid, "reply": result_text(item, calculated_units, units_note, msg), "matches": []}
+        # إذا لم يتم استخراج الكمية المحسوبة من LLM، نطلب من المستخدم توضيحًا
+        else:
+            session.update({"step": "need_quantity", "selected_item": item})
+            return {"session_id": sid, "reply": f"وجدت الصنف: {item.get(\'name\')}\n{unit_question(item)}", "matches": [item]}
+
+    session.update({"step": "select_item", "matches": matches})
+    return {"session_id": sid, "reply": format_matches(matches), "matches": matches}
+
+
+async def general_chat(message: str, use_search: bool = True) -> str:
         nums = extract_numbers(msg)
         matches = session.get("matches") or []
         if nums and 1 <= int(nums[0]) <= len(matches):
@@ -252,7 +357,7 @@ def customs_chat(message: str, session_id: Optional[str], extra_items: Optional[
         item = matches[0]
         units, note = compute_units(item, msg)
         if units is not None:
-            return {"session_id": sid, "reply": result_text(item, units, note), "matches": []}
+            return {"session_id": sid, "reply": result_text(item, units, note, msg), "matches": []}
         session.update({"step": "need_quantity", "selected_item": item})
         return {"session_id": sid, "reply": f"وجدت الصنف: {item.get('name')}\n{unit_question(item)}", "matches": [item]}
 
@@ -328,6 +433,60 @@ async def call_anthropic(prompt: str, search_context: str = "") -> Optional[str]
         return f"تعذر الاتصال بـ Anthropic حاليًا: {e}"
 
 
+async def parse_customs_query_with_llm(query: str) -> Dict[str, Any]:
+    prompt = f"""حلل استعلام الجمارك التالي واستخرج منه المعلومات المطلوبة في صيغة JSON. إذا كانت المعلومة غير موجودة، اترك الحقل فارغًا أو null. لا تخترع معلومات.
+
+الاستعلام: {query}
+
+المعلومات المطلوبة:
+- item_query: اسم السلعة أو وصفها (مثال: بطاريات ليثيوم، ملابس ولادي)
+- quantity: العدد الإجمالي للوحدات (مثال: 5، 100)
+- unit: وحدة الكمية (مثال: حبة، درزن، طن، كيلو)
+- package_count: عدد الطرود/الكراتين (مثال: 5، 2)
+- units_per_package: العدد داخل كل طرد أو كرتون (مثال: 3، 12)
+- capacity: السعة (مثال: 100، 550)
+- capacity_unit: وحدة السعة (مثال: أمبير، واط)
+- missing_fields: قائمة بالحقول الناقصة الضرورية للحساب (مثال: ["quantity", "capacity"])
+
+أمثلة:
+- معي 5 طرد ملابس، كل طرد 3 درزن
+  {{"item_query": "ملابس", "quantity": null, "unit": "درزن", "package_count": 5, "units_per_package": 3, "capacity": null, "capacity_unit": null, "missing_fields": []}}
+- كم على بطاريات؟
+  {{"item_query": "بطاريات", "quantity": null, "unit": null, "package_count": null, "units_per_package": null, "capacity": null, "capacity_unit": null, "missing_fields": ["item_query", "quantity", "unit", "capacity", "capacity_unit"]}}
+- معي بطارية ليثيوم 100 أمبير عدد 4
+  {{"item_query": "بطارية ليثيوم", "quantity": 4, "unit": "عدد", "package_count": null, "units_per_package": null, "capacity": 100, "capacity_unit": "أمبير", "missing_fields": []}}
+- عندي كرتونين لمبات، كل كرتون 12 حبة
+  {{"item_query": "لمبات", "quantity": null, "unit": "حبة", "package_count": 2, "units_per_package": 12, "capacity": null, "capacity_unit": null, "missing_fields": []}}
+- كم جمارك طقم دش؟
+  {{"item_query": "طقم دش", "quantity": null, "unit": null, "package_count": null, "units_per_package": null, "capacity": null, "capacity_unit": null, "missing_fields": ["quantity", "unit"]}}
+- معي ألواح 550 واط عدد 6
+  {{"item_query": "ألواح", "quantity": 6, "unit": "عدد", "package_count": null, "units_per_package": null, "capacity": 550, "capacity_unit": "واط", "missing_fields": []}}
+- عندي بضاعة ملابس أطفال 5 كراتين
+  {{"item_query": "ملابس أطفال", "quantity": 5, "unit": "كراتين", "package_count": null, "units_per_package": null, "capacity": null, "capacity_unit": null, "missing_fields": []}}
+- كم تدفع على 2 طن ورق؟
+  {{"item_query": "ورق", "quantity": 2, "unit": "طن", "package_count": null, "units_per_package": null, "capacity": null, "capacity_unit": null, "missing_fields": []}}
+
+الآن حلل الاستعلام التالي:
+الاستعلام: {query}
+الناتج بصيغة JSON فقط:
+"""
+    response = await call_groq(prompt)
+    if response is None:
+        response = await call_anthropic(prompt)
+
+    if response:
+        try:
+            # LLM قد يضيف نصًا قبل أو بعد الـ JSON، لذا نحاول استخراج الـ JSON فقط
+            json_match = re.search(r"```json\n(.*?)```", response, re.DOTALL)
+            if json_match:
+                return json.loads(json_match.group(1))
+            return json.loads(response)
+        except json.JSONDecodeError:
+            print(f"Failed to decode JSON from LLM: {response}")
+            return {}
+    return {}
+
+
 async def general_chat(message: str, use_search: bool = True) -> str:
     search_context = await google_search_serper(message) if use_search else ""
     reply = await call_groq(message, search_context)
@@ -340,6 +499,39 @@ async def general_chat(message: str, use_search: bool = True) -> str:
         return "لم يتم ضبط مفاتيح Groq أو Anthropic، لكن هذه نتائج بحث أولية:\n" + search_context
     return "الوضع العام يحتاج إضافة مفتاح GROQ_API_KEY أو ANTHROPIC_API_KEY في Secrets. أما وضع الجمارك فيعمل من ملف الأصناف بدون مفاتيح."
 
+
+@app.post("/api/admin/verify_pin")
+async def verify_admin_pin(payload: Dict[str, str] = Body(...)) -> JSONResponse:
+    config = load_exchange_rate_config()
+    if payload.get("pin") == config.get("admin_pin"):
+        return JSONResponse({"success": True})
+    return JSONResponse({"success": False, "message": "رمز PIN غير صحيح"}, status_code=401)
+
+@app.get("/api/admin/exchange_rate")
+async def get_admin_exchange_rate() -> JSONResponse:
+    config = load_exchange_rate_config()
+    return JSONResponse({"exchange_rate": config.get("exchange_rate", 1563.0)})
+
+@app.post("/api/admin/exchange_rate")
+async def update_admin_exchange_rate(payload: Dict[str, Any] = Body(...)) -> JSONResponse:
+    config = load_exchange_rate_config()
+    if payload.get("pin") != config.get("admin_pin"):
+        return JSONResponse({"success": False, "message": "رمز PIN غير صحيح"}, status_code=401)
+    try:
+        new_rate = float(payload.get("exchange_rate"))
+        if new_rate <= 0:
+            raise ValueError("سعر الصرف يجب أن يكون رقمًا موجبًا")
+        config["exchange_rate"] = new_rate
+        save_exchange_rate_config(config)
+        return JSONResponse({"success": True, "exchange_rate": new_rate})
+    except ValueError as e:
+        return JSONResponse({"success": False, "message": str(e)}, status_code=400)
+
+@app.get("/api/health")
+async def health_check() -> JSONResponse:
+    items = base_items()
+    exchange_rate = get_current_exchange_rate()
+    return JSONResponse({"status": "ok", "items": len(items), "exchange_rate": exchange_rate})
 
 @app.get("/")
 def index():
