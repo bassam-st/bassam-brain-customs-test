@@ -344,7 +344,7 @@ async def customs_chat(message: str, session_id: Optional[str], extra_items: Opt
 
     parsed = await parse_customs_query_with_llm(msg)
     item_query = parsed.get("item_query") or msg
-    matches = search_items(item_query, items, limit=6)
+    matches = search_items(item_query, items)
     
     if not matches:
         return {"session_id": sid, "reply": "لم أجد هذا الصنف. حاول كتابة اسم الصنف بوضوح.", "matches": []}
